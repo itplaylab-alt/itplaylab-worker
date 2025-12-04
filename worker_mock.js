@@ -70,8 +70,8 @@ async function pollOnce() {
   console.log(`[WORKER] 📦 Job 할당됨: id=${job.id}, status=${job.status}`);
 
   try {
-    await processJob(job); // 실제 작업(ffmpeg 테스트)
-    await updateJobStatus(job.id, 'DONE'); // 완료 처리
+    await processJob(job);
+    await updateJobStatus(job.id, 'DONE');
     console.log(`[WORKER] ✅ Job 완료 처리: id=${job.id}, status=DONE`);
   } catch (err) {
     console.error(`[WORKER] ❌ Job 처리 실패: id=${job.id}`);
@@ -108,23 +108,21 @@ setInterval(pollLoop, POLL_INTERVAL_MS);
 console.log('[WORKER] 🚀 Polling loop started');
 
 // ____________________________
-// 실제 작업 로직 (ffmpeg로 5초짜리 테스트 영상 생성)
+// 실제 작업 로직 (ffmpeg로 5초짜리 테스트 영상 생성 + 썸네일 생성)
 // ____________________________
 async function processJob(job) {
   console.log(`[WORKER] 🛠 Job 처리 시작: id=${job.id}`);
-
   console.log(`[WORKER] ▶ ffmpeg binary: ${ffmpegPath}`);
 
-  // 1) ffmpeg 버전 한 번 찍고 (설비 이상 여부 확인용)
+  // 1) ffmpeg 버전 체크
   try {
     await runFfmpegVersion();
   } catch (err) {
     console.error('[WORKER] ❌ ffmpeg 버전 확인 실패:', err.message || err);
-    // ffmpeg 자체가 안 돌면 이 Job은 FAILED 처리
     throw err;
   }
 
-  // 2) 이 Job을 위한 출력 경로 설정 (영상)
+  // 2) 출력 영상 경로
   const outputPath = `/tmp/job_${job.id}.mp4`;
   console.log(`[WORKER] ▶ 테스트 영상 렌더링 시작: ${outputPath}`);
 
@@ -137,14 +135,12 @@ async function processJob(job) {
     console.log(
       `[WORKER] ▶ 썸네일 생성 시작: input=${outputPath}, output=${thumbPath}`
     );
+
     await renderThumbnail(outputPath, thumbPath);
     console.log(`[WORKER] ✅ 썸네일 생성 완료: ${thumbPath}`);
+
   } catch (err) {
-    console.error(
-      '[WORKER] ❌ 테스트 영상/썸네일 생성 실패:',
-      err.message || err,
-    );
-    // 여기서 throw 해야 상위에서 FAILED 처리로 넘어감
+    console.error('[WORKER] ❌ 테스트 영상/썸네일 생성 실패:', err.message || err);
     throw err;
   }
 
@@ -191,13 +187,8 @@ function runFfmpegVersion() {
 
     let output = '';
 
-    child.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-      output += data.toString();
-    });
+    child.stdout.on('data', (data) => (output += data.toString()));
+    child.stderr.on('data', (data) => (output += data.toString()));
 
     child.on('close', (code) => {
       if (code === 0) {
@@ -212,36 +203,27 @@ function runFfmpegVersion() {
 }
 
 // ==========================
-//  새로 넣는 renderTestVideo
+//  테스트 영상 생성 함수
 // ==========================
 
 function renderTestVideo(outputPath) {
   return new Promise((resolve, reject) => {
     const args = [
       '-y',
-      '-f',
-      'lavfi',
-      '-i',
-      'color=c=black:s=1280x720:d=5',
-      '-c:v',
-      'libx264',
-      '-pix_fmt',
-      'yuv420p',
+      '-f', 'lavfi',
+      '-i', 'color=c=black:s=1280x720:d=5',
+      '-c:v', 'libx264',
+      '-pix_fmt', 'yuv420p',
       outputPath,
     ];
 
-    console.log(
-      '[WORKER] ▶ ffmpeg 실행:',
-      ffmpegPath,
-      args.join(' '),
-    );
+    console.log('[WORKER] ▶ ffmpeg 실행:', ffmpegPath, args.join(' '));
 
     const child = spawn(ffmpegPath, args);
     let output = '';
 
     child.stdout.on('data', (data) => (output += data.toString()));
     child.stderr.on('data', (data) => (output += data.toString()));
-
     child.on('error', (err) => reject(err));
 
     child.on('close', (code) => {
@@ -251,8 +233,49 @@ function renderTestVideo(outputPath) {
   });
 }
 
-// ____________________________
-// 유틸
+// ==========================
+//  썸네일 생성 함수
+// ==========================
+
+function renderThumbnail(inputPath, thumbPath) {
+  return new Promise((resolve, reject) => {
+    console.log(
+      `[WORKER] ▶ 썸네일 생성 시작(내부 ffmpeg): input=${inputPath}, output=${thumbPath}`
+    );
+
+    const args = [
+      '-ss', '00:00:01',   // 1초 지점
+      '-i', inputPath,     // mp4
+      '-vframes', '1',     // 1장
+      '-q:v', '2',         // 화질
+      thumbPath,
+    ];
+
+    const child = spawn(ffmpegPath, args);
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => (stdout += data.toString()));
+    child.stderr.on('data', (data) => (stderr += data.toString()));
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        console.log(`[WORKER] 👍 썸네일 생성 완료: ${thumbPath}`);
+        resolve();
+      } else {
+        console.error('[WORKER] ❌ 썸네일 생성 실패');
+        reject(new Error(`ffmpeg thumbnail exited with code ${code}\n${stderr}`));
+      }
+    });
+
+    child.on('error', (err) => {
+      console.error('[WORKER] ❌ 썸네일 생성 중 프로세스 에러:', err);
+      reject(err);
+    });
+  });
+}
+
 // ____________________________
 
 function sleep(ms) {
