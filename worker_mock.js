@@ -4,9 +4,19 @@
 const JOBQUEUE_WEBAPP_URL = process.env.JOBQUEUE_WEBAPP_URL;
 const POLL_INTERVAL_MS = 5000; // 5초마다 폴링
 
-// ffmpeg
-const ffmpegPath = require('ffmpeg-static');
+// ffmpeg (옵셔널: ffmpeg-static 있으면 사용, 없으면 전역 ffmpeg)
 const { spawn } = require('child_process');
+
+let ffmpegPath;
+
+try {
+  ffmpegPath = require('ffmpeg-static');
+  console.log('[WORKER] 🎬 ffmpeg-static 모듈 로드됨:', ffmpegPath);
+} catch (e) {
+  console.warn('[WORKER] ⚠ ffmpeg-static 모듈을 찾지 못했습니다. 전역 ffmpeg 바이너리를 시도합니다.');
+  ffmpegPath = 'ffmpeg'; // PATH에 있는 ffmpeg 사용 시도
+}
+
 
 if (!JOBQUEUE_WEBAPP_URL) {
   console.error('[WORKER] ❌ 환경변수 JOBQUEUE_WEBAPP_URL 이 설정되지 않았습니다.');
