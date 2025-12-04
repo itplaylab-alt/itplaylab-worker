@@ -110,7 +110,6 @@ console.log('[WORKER] 🚀 Polling loop started');
 // ____________________________
 // 실제 작업 로직 (ffmpeg로 5초짜리 테스트 영상 생성)
 // ____________________________
-
 async function processJob(job) {
   console.log(`[WORKER] 🛠 Job 처리 시작: id=${job.id}`);
 
@@ -152,71 +151,6 @@ async function processJob(job) {
   console.log(`[WORKER] ✅ Job 처리 완료: id=${job.id}`);
 }
 
-  try {
-    await renderTestVideo(outputPath);
-    console.log(`[WORKER] ✅ 테스트 영상 렌더링 완료: ${outputPath}`);
-
-// === 썸네일 생성 ===
-const thumbPath = `/tmp/job_${job.id}.jpg`;
-console.log(`[WORKER] ▶ 썸네일 생성 시작: input=${outputPath}, output=${thumbPath}`);
-await renderThumbnail(outputPath, thumbPath);
-console.log(`[WORKER] ✅ 썸네일 생성 완료: ${thumbPath}`);
-
-  
-  } catch (err) {
-    console.error(
-      '[WORKER] ❌ 테스트 영상 렌더링 실패:',
-      err.message || err,
-    );
-    // 여기서 throw 해야 상위에서 FAILED 처리로 넘어감
-    throw err;
-  }
-
-  console.log(`[WORKER] ✅ Job 처리 완료: id=${job.id}`);
-}
-function renderThumbnail(inputPath, thumbPath) {
-  return new Promise((resolve, reject) => {
-    console.log(`[WORKER] ▶ 썸네일 생성 시작: input=${inputPath}, output=${thumbPath}`);
-
-    const args = [
-      '-ss', '00:00:01', // 1초 지점으로 점프
-      '-i', inputPath,   // 입력 mp4
-      '-vframes', '1',   // 프레임 1장만
-      '-q:v', '2',       // 퀄리티(1이 최고, 2도 충분히 좋음)
-      thumbPath,
-    ];
-
-    const child = spawn(ffmpegPath, args);
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        console.log(`[WORKER] ✅ 썸네일 생성 완료: ${thumbPath}`);
-        return resolve();
-      } else {
-        console.error('[WORKER] ❌ 썸네일 생성 실패');
-        console.error('stdout:', stdout);
-        console.error('stderr:', stderr);
-        return reject(new Error(`ffmpeg thumbnail exited with code ${code}`));
-      }
-    });
-
-    child.on('error', (err) => {
-      console.error('[WORKER] ❌ 썸네일 생성 중 프로세스 에러:', err);
-      reject(err);
-    });
-  });
-}
 // ____________________________
 // Job 상태 업데이트 API 호출
 // ____________________________
