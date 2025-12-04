@@ -1,5 +1,5 @@
 // worker_mock.js
-// ItplayLab JobQueue Worker (Render용, fetch + ffmpeg 버전)
+// ItplayLab JobQueue Worker (Render용, fetch + ffmpeg 스모크 테스트)
 
 const JOBQUEUE_WEBAPP_URL = process.env.JOBQUEUE_WEBAPP_URL;
 const POLL_INTERVAL_MS = 5000; // 5초마다 폴링
