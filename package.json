@@ -1,0 +1,9 @@
+{
+  "name": "itplaylab-worker",
+  "version": "1.0.0",
+  "main": "worker_mock.js",
+  "scripts": {
+    "start": "node worker_mock.js"
+  },
+  "dependencies": {}
+}
