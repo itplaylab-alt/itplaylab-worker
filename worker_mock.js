@@ -105,20 +105,36 @@ console.log('[WORKER] 🚀 Polling loop started');
 // 실제 작업 로직 (ffmpeg 스모크 테스트)
 // ____________________________
 
+// ____________________________
+// 실제 작업 로직 (ffmpeg로 5초짜리 테스트 영상 생성)
+// ____________________________
+
 async function processJob(job) {
   console.log(`[WORKER] 🛠 Job 처리 시작: id=${job.id}`);
 
-  if (!ffmpegPath) {
-    console.warn('[WORKER] ⚠ ffmpeg-static 경로를 찾지 못했습니다.');
-    await sleep(1000);
-    return;
+  console.log(`[WORKER] ▶ ffmpeg binary: ${ffmpegPath}`);
+
+  // 1) ffmpeg 버전 한 번 찍고 (설비 이상 여부 확인용)
+  try {
+    await runFfmpegVersion();
+  } catch (err) {
+    console.error('[WORKER] ❌ ffmpeg 버전 확인 실패:', err.message || err);
+    throw err; // ffmpeg 자체가 안 돌면 이 Job은 FAILED 로 처리
   }
 
-  console.log(`[WORKER] ▶ ffmpeg 버전 확인 (binary: ${ffmpegPath})`);
+  // 2) 이 Job을 위한 출력 경로 설정
+  const outputPath = `/tmp/job_${job.id}.mp4`;
+  console.log(`[WORKER] ▶ 테스트 영상 렌더링 시작: ${outputPath}`);
 
-  await runFfmpegVersion();
+  try {
+    await renderTestVideo(outputPath);
+    console.log(`[WORKER] ✅ 테스트 영상 렌더링 완료: ${outputPath}`);
+  } catch (err) {
+    console.error('[WORKER] ❌ 테스트 영상 렌더링 실패:', err.message || err);
+    throw err; // 여기서 throw 해야 상위에서 FAILED 처리로 넘어감
+  }
 
-  console.log(`[WORKER] ✅ ffmpeg 버전 확인 완료: id=${job.id}`);
+  console.log(`[WORKER] ✅ Job 처리 완료: id=${job.id}`);
 }
 
 // ____________________________
@@ -180,6 +196,44 @@ function runFfmpegVersion() {
     });
   });
 }
+199 });
+200 }
+
+// ==========================
+//  새로 넣는 renderTestVideo
+// ==========================
+function renderTestVideo(outputPath) {
+    return new Promise((resolve, reject) => {
+        const args = [
+            '-y',
+            '-f', 'lavfi',
+            '-i', 'color=c=black:s=1280x720:d=5',
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            outputPath,
+        ];
+
+        console.log('[WORKER] ▶ ffmpeg 실행:', ffmpegPath, args.join(' '));
+
+        const child = spawn(ffmpegPath, args);
+        let output = '';
+
+        child.stdout.on('data', data => output += data.toString());
+        child.stderr.on('data', data => output += data.toString());
+
+        child.on('error', err => reject(err));
+
+        child.on('close', code => {
+            if (code === 0) resolve();
+            else reject(new Error(`ffmpeg 종료 코드 ${code}\n${output}`));
+        });
+    });
+}
+
+// _____________________________
+// 유틸
+// _____________________________
+
 
 // ____________________________
 // 유틸
