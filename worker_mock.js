@@ -1,9 +1,6 @@
 // worker_mock.js
-// ItplayLab JobQueue Worker (Render용)
+// ItplayLab JobQueue Worker (Render용, fetch 버전)
 
-const axios = require('axios');
-
-// 🔧 환경변수에서 JobQueue WebApp URL 가져오기
 const JOBQUEUE_WEBAPP_URL = process.env.JOBQUEUE_WEBAPP_URL;
 const POLL_INTERVAL_MS = 5000; // 5초마다 폴링
 
@@ -25,25 +22,21 @@ let isProcessing = false;
 async function pollOnce() {
   console.log(`\n[WORKER] 🔄 next-job 요청 (${new Date().toISOString()})`);
 
-  let res;
+  let resJson;
   try {
-    res = await axios.post(
-      JOBQUEUE_WEBAPP_URL,
-      { route: 'next-job' },
-      { timeout: 10_000 }
-    );
+    const res = await fetch(JOBQUEUE_WEBAPP_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ route: 'next-job' }),
+    });
+
+    resJson = await res.json();
   } catch (err) {
-    console.error('[WORKER] ❌ next-job 호출 실패');
-    if (err.response) {
-      console.error('  status:', err.response.status);
-      console.error('  data  :', err.response.data);
-    } else {
-      console.error('  error :', err.message || err);
-    }
+    console.error('[WORKER] ❌ next-job 호출 실패:', err.message || err);
     return;
   }
 
-  const data = res.data || {};
+  const data = resJson || {};
   const ok = data.ok;
   const job = data.job;
 
@@ -67,7 +60,6 @@ async function pollOnce() {
     console.error(`[WORKER] ❌ Job 처리 실패: id=${job.id}`);
     console.error('  error:', err.message || err);
 
-    // 실패 시 FAILED 로 남겨두기 (원하면 나중에 RETRY 설계)
     try {
       await updateJobStatus(job.id, 'FAILED');
       console.log(`[WORKER] ⚠️ Job 상태를 FAILED 로 저장: id=${job.id}`);
@@ -120,9 +112,20 @@ async function updateJobStatus(id, status) {
     status,
   };
 
-  const res = await axios.post(JOBQUEUE_WEBAPP_URL, payload, { timeout: 10_000 });
-  const data = res.data || {};
+  let resJson;
+  try {
+    const res = await fetch(JOBQUEUE_WEBAPP_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
 
+    resJson = await res.json();
+  } catch (err) {
+    throw new Error('update-job-status 호출 실패: ' + (err.message || err));
+  }
+
+  const data = resJson || {};
   if (!data.ok) {
     throw new Error('update-job-status 응답 ok:false: ' + JSON.stringify(data));
   }
