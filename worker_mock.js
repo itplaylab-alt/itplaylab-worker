@@ -121,13 +121,36 @@ async function processJob(job) {
     await runFfmpegVersion();
   } catch (err) {
     console.error('[WORKER] ❌ ffmpeg 버전 확인 실패:', err.message || err);
-    // ffmpeg 자체가 안 돌면 이 Job은 FAILED 로 처리
+    // ffmpeg 자체가 안 돌면 이 Job은 FAILED 처리
     throw err;
   }
 
-  // 2) 이 Job을 위한 출력 경로 설정
+  // 2) 이 Job을 위한 출력 경로 설정 (영상)
   const outputPath = `/tmp/job_${job.id}.mp4`;
   console.log(`[WORKER] ▶ 테스트 영상 렌더링 시작: ${outputPath}`);
+
+  try {
+    await renderTestVideo(outputPath);
+    console.log(`[WORKER] ✅ 테스트 영상 렌더링 완료: ${outputPath}`);
+
+    // 3) 썸네일 생성
+    const thumbPath = `/tmp/job_${job.id}.jpg`;
+    console.log(
+      `[WORKER] ▶ 썸네일 생성 시작: input=${outputPath}, output=${thumbPath}`
+    );
+    await renderThumbnail(outputPath, thumbPath);
+    console.log(`[WORKER] ✅ 썸네일 생성 완료: ${thumbPath}`);
+  } catch (err) {
+    console.error(
+      '[WORKER] ❌ 테스트 영상/썸네일 생성 실패:',
+      err.message || err,
+    );
+    // 여기서 throw 해야 상위에서 FAILED 처리로 넘어감
+    throw err;
+  }
+
+  console.log(`[WORKER] ✅ Job 처리 완료: id=${job.id}`);
+}
 
   try {
     await renderTestVideo(outputPath);
