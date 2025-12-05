@@ -1,32 +1,39 @@
 // worker_mock.js
-// ItplayLab JobQueue Worker (Render용, fetch + ffmpeg 스모크 테스트)
+// ItplayLab JobQueue Worker (Render용, /next-job 폴링 + ffmpeg 스모크 테스트)
 
 const JOBQUEUE_WEBAPP_URL = process.env.JOBQUEUE_WEBAPP_URL;
+const JOBQUEUE_WORKER_SECRET = process.env.JOBQUEUE_WORKER_SECRET || "";
 const POLL_INTERVAL_MS = 5000; // 5초마다 폴링
 
 // ffmpeg (옵셔널: ffmpeg-static 있으면 사용, 없으면 전역 ffmpeg)
-const { spawn } = require('child_process');
+const { spawn } = require("child_process");
 
 let ffmpegPath;
 
 try {
-  ffmpegPath = require('ffmpeg-static');
-  console.log('[WORKER] 🎬 ffmpeg-static 모듈 로드됨:', ffmpegPath);
+  ffmpegPath = require("ffmpeg-static");
+  console.log("[WORKER] 🎬 ffmpeg-static 모듈 로드됨:", ffmpegPath);
 } catch (e) {
   console.warn(
-    '[WORKER] ⚠ ffmpeg-static 모듈을 찾지 못했습니다. 전역 ffmpeg 바이너리를 시도합니다.',
+    "[WORKER] ⚠ ffmpeg-static 모듈을 찾지 못했습니다. 전역 ffmpeg 바이너리를 시도합니다."
   );
-  ffmpegPath = 'ffmpeg'; // PATH에 있는 ffmpeg 사용 시도
+  ffmpegPath = "ffmpeg"; // PATH에 있는 ffmpeg 사용 시도
 }
 
 if (!JOBQUEUE_WEBAPP_URL) {
   console.error(
-    '[WORKER] ❌ 환경변수 JOBQUEUE_WEBAPP_URL 이 설정되지 않았습니다.',
+    "[WORKER] ❌ 환경변수 JOBQUEUE_WEBAPP_URL 이 설정되지 않았습니다."
   );
   process.exit(1);
 }
 
-console.log('[WORKER] ✅ Worker 시작됨');
+if (!JOBQUEUE_WORKER_SECRET) {
+  console.warn(
+    "[WORKER] ⚠ JOBQUEUE_WORKER_SECRET 이 비어있습니다. 서버에서 인증을 건다면 꼭 설정해야 합니다."
+  );
+}
+
+console.log("[WORKER] ✅ Worker 시작됨");
 console.log(`[WORKER] JobQueue URL: ${JOBQUEUE_WEBAPP_URL}`);
 console.log(`[WORKER] Poll interval: ${POLL_INTERVAL_MS}ms`);
 
@@ -37,53 +44,68 @@ let isProcessing = false;
 // ____________________________
 
 async function pollOnce() {
-  console.log(`\n[WORKER] 🔄 next-job 요청 (${new Date().toISOString()})`);
+  console.log(`\n[WORKER] 🔄 /next-job 요청 (${new Date().toISOString()})`);
 
-  let resJson;
+  let raw;
   try {
     const res = await fetch(JOBQUEUE_WEBAPP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ route: 'next-job' }),
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "x-jobqueue-secret": JOBQUEUE_WORKER_SECRET,
+      },
     });
 
-    resJson = await res.json();
+    raw = await res.text();
   } catch (err) {
-    console.error('[WORKER] ❌ next-job 호출 실패:', err.message || err);
+    console.error("[WORKER] ❌ /next-job 호출 실패:", err.message || err);
     return;
   }
 
-  const data = resJson || {};
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    console.error(
+      "[WORKER] ❌ /next-job JSON 파싱 실패. 응답 일부:",
+      String(raw).slice(0, 200)
+    );
+    return;
+  }
+
   const ok = data.ok;
+  const hasJob = data.has_job;
   const job = data.job;
 
   if (!ok) {
-    console.warn('[WORKER] ⚠️ next-job 응답 ok:false', data);
+    console.warn("[WORKER] ⚠️ /next-job 응답 ok:false", data);
     return;
   }
 
-  if (!job) {
-    console.log('[WORKER] 📭 PENDING job 없음 (대기)');
+  if (!hasJob || !job) {
+    console.log("[WORKER] 📭 PENDING job 없음 (has_job=false)");
     return;
   }
 
-  console.log(`[WORKER] 📦 Job 할당됨: id=${job.id}, status=${job.status}`);
+  console.log(
+    `[WORKER] 📦 Job 할당됨: id=${job.id || "unknown"}, status=${job.status || "-"}`
+  );
 
   try {
     await processJob(job);
-    await updateJobStatus(job.id, 'DONE');
+    await updateJobStatus(job.id, "DONE");
     console.log(`[WORKER] ✅ Job 완료 처리: id=${job.id}, status=DONE`);
   } catch (err) {
     console.error(`[WORKER] ❌ Job 처리 실패: id=${job.id}`);
-    console.error('  error:', err.message || err);
+    console.error("  error:", err.message || err);
 
     try {
-      await updateJobStatus(job.id, 'FAILED');
-      console.log(`[WORKER] ⚠️ Job 상태를 FAILED 로 저장: id=${job.id}`);
+      await updateJobStatus(job.id, "FAILED");
+      console.log(`[WORKER] ⚠️ Job 상태를 FAILED 로 저장(모의): id=${job.id}`);
     } catch (e2) {
       console.error(
-        '[WORKER] ❌ FAILED 상태 업데이트도 실패',
-        e2.message || e2,
+        "[WORKER] ❌ FAILED 상태 업데이트도 실패(모의)",
+        e2.message || e2
       );
     }
   }
@@ -92,7 +114,7 @@ async function pollOnce() {
 // interval마다 돌리되, 이전 작업이 끝나지 않았으면 skip
 async function pollLoop() {
   if (isProcessing) {
-    console.log('[WORKER] ⏸ 이전 Job 처리 중, 이번 턴은 건너뜀');
+    console.log("[WORKER] ⏸ 이전 Job 처리 중, 이번 턴은 건너뜀");
     return;
   }
 
@@ -105,7 +127,7 @@ async function pollLoop() {
 }
 
 setInterval(pollLoop, POLL_INTERVAL_MS);
-console.log('[WORKER] 🚀 Polling loop started');
+console.log("[WORKER] 🚀 Polling loop started");
 
 // ____________________________
 // 실제 작업 로직 (ffmpeg로 5초짜리 테스트 영상 생성 + 썸네일 생성)
@@ -118,7 +140,7 @@ async function processJob(job) {
   try {
     await runFfmpegVersion();
   } catch (err) {
-    console.error('[WORKER] ❌ ffmpeg 버전 확인 실패:', err.message || err);
+    console.error("[WORKER] ❌ ffmpeg 버전 확인 실패:", err.message || err);
     throw err;
   }
 
@@ -138,9 +160,11 @@ async function processJob(job) {
 
     await renderThumbnail(outputPath, thumbPath);
     console.log(`[WORKER] ✅ 썸네일 생성 완료: ${thumbPath}`);
-
   } catch (err) {
-    console.error('[WORKER] ❌ 테스트 영상/썸네일 생성 실패:', err.message || err);
+    console.error(
+      "[WORKER] ❌ 테스트 영상/썸네일 생성 실패:",
+      err.message || err
+    );
     throw err;
   }
 
@@ -148,33 +172,11 @@ async function processJob(job) {
 }
 
 // ____________________________
-// Job 상태 업데이트 API 호출
+// Job 상태 업데이트 (지금은 모의 로그만)
+// 추후 서버에 전용 엔드포인트 만들면 여기서 axios/fetch 로 호출하면 됨.
 // ____________________________
-
 async function updateJobStatus(id, status) {
-  const payload = {
-    route: 'update-job-status',
-    id,
-    status,
-  };
-
-  let resJson;
-  try {
-    const res = await fetch(JOBQUEUE_WEBAPP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    resJson = await res.json();
-  } catch (err) {
-    throw new Error('update-job-status 호출 실패: ' + (err.message || err));
-  }
-
-  const data = resJson || {};
-  if (!data.ok) {
-    throw new Error('update-job-status 응답 ok:false: ' + JSON.stringify(data));
-  }
+  console.log(`[WORKER] (mock) Job 상태 업데이트: id=${id}, status=${status}`);
 }
 
 // ____________________________
@@ -183,17 +185,17 @@ async function updateJobStatus(id, status) {
 
 function runFfmpegVersion() {
   return new Promise((resolve, reject) => {
-    const child = spawn(ffmpegPath, ['-version']);
+    const child = spawn(ffmpegPath, ["-version"]);
 
-    let output = '';
+    let output = "";
 
-    child.stdout.on('data', (data) => (output += data.toString()));
-    child.stderr.on('data', (data) => (output += data.toString()));
+    child.stdout.on("data", (data) => (output += data.toString()));
+    child.stderr.on("data", (data) => (output += data.toString()));
 
-    child.on('close', (code) => {
+    child.on("close", (code) => {
       if (code === 0) {
-        const firstLine = output.split('\n')[0];
-        console.log('[WORKER] ffmpeg -version 출력 (첫 줄):', firstLine);
+        const firstLine = output.split("\n")[0];
+        console.log("[WORKER] ffmpeg -version 출력 (첫 줄):", firstLine);
         resolve();
       } else {
         reject(new Error(`ffmpeg 종료 코드 ${code}\n${output}`));
@@ -209,24 +211,28 @@ function runFfmpegVersion() {
 function renderTestVideo(outputPath) {
   return new Promise((resolve, reject) => {
     const args = [
-      '-y',
-      '-f', 'lavfi',
-      '-i', 'color=c=black:s=1280x720:d=5',
-      '-c:v', 'libx264',
-      '-pix_fmt', 'yuv420p',
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=black:s=1280x720:d=5",
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
       outputPath,
     ];
 
-    console.log('[WORKER] ▶ ffmpeg 실행:', ffmpegPath, args.join(' '));
+    console.log("[WORKER] ▶ ffmpeg 실행:", ffmpegPath, args.join(" "));
 
     const child = spawn(ffmpegPath, args);
-    let output = '';
+    let output = "";
 
-    child.stdout.on('data', (data) => (output += data.toString()));
-    child.stderr.on('data', (data) => (output += data.toString()));
-    child.on('error', (err) => reject(err));
+    child.stdout.on("data", (data) => (output += data.toString()));
+    child.stderr.on("data", (data) => (output += data.toString()));
+    child.on("error", (err) => reject(err));
 
-    child.on('close', (code) => {
+    child.on("close", (code) => {
       if (code === 0) resolve();
       else reject(new Error(`ffmpeg 종료 코드 ${code}\n${output}`));
     });
@@ -244,40 +250,40 @@ function renderThumbnail(inputPath, thumbPath) {
     );
 
     const args = [
-      '-ss', '00:00:01',   // 1초 지점
-      '-i', inputPath,     // mp4
-      '-vframes', '1',     // 1장
-      '-q:v', '2',         // 화질
+      "-ss",
+      "00:00:01", // 1초 지점
+      "-i",
+      inputPath, // mp4
+      "-vframes",
+      "1", // 1장
+      "-q:v",
+      "2", // 화질
       thumbPath,
     ];
 
     const child = spawn(ffmpegPath, args);
 
-    let stdout = '';
-    let stderr = '';
+    let stdout = "";
+    let stderr = "";
 
-    child.stdout.on('data', (data) => (stdout += data.toString()));
-    child.stderr.on('data', (data) => (stderr += data.toString()));
+    child.stdout.on("data", (data) => (stdout += data.toString()));
+    child.stderr.on("data", (data) => (stderr += data.toString()));
 
-    child.on('close', (code) => {
+    child.on("close", (code) => {
       if (code === 0) {
         console.log(`[WORKER] 👍 썸네일 생성 완료: ${thumbPath}`);
         resolve();
       } else {
-        console.error('[WORKER] ❌ 썸네일 생성 실패');
-        reject(new Error(`ffmpeg thumbnail exited with code ${code}\n${stderr}`));
+        console.error("[WORKER] ❌ 썸네일 생성 실패");
+        reject(
+          new Error(`ffmpeg thumbnail exited with code ${code}\n${stderr}`)
+        );
       }
     });
 
-    child.on('error', (err) => {
-      console.error('[WORKER] ❌ 썸네일 생성 중 프로세스 에러:', err);
+    child.on("error", (err) => {
+      console.error("[WORKER] ❌ 썸네일 생성 중 프로세스 에러:", err);
       reject(err);
     });
   });
-}
-
-// ____________________________
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
