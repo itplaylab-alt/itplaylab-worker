@@ -5,6 +5,12 @@ const JOBQUEUE_WEBAPP_URL = process.env.JOBQUEUE_WEBAPP_URL;
 const JOBQUEUE_WORKER_SECRET = process.env.JOBQUEUE_WORKER_SECRET || "";
 const POLL_INTERVAL_MS = 5000; // 5초마다 폴링
 
+// ✅ 완료 상태 업데이트용 엔드포인트 URL
+//    서버에서 /update-job-status 같은 라우트를 쓸 거라고 가정하고 만듦
+const JOB_STATUS_URL =
+  JOBQUEUE_WEBAPP_URL &&
+  JOBQUEUE_WEBAPP_URL.replace(/\/next-job.*$/i, "/update-job-status");
+
 // ffmpeg (옵셔널: ffmpeg-static 있으면 사용, 없으면 전역 ffmpeg)
 const { spawn } = require("child_process");
 
@@ -88,11 +94,15 @@ async function pollOnce() {
   }
 
   console.log(
-    `[WORKER] 📦 Job 할당됨: id=${job.id || "unknown"}, status=${job.status || "-"}`
+    `[WORKER] 📦 Job 할당됨: id=${job.id || "unknown"}, status=${
+      job.status || "-"
+    }`
   );
 
   try {
     await processJob(job);
+
+    // ✅ Job 성공적으로 끝났을 때: DONE
     await updateJobStatus(job.id, "DONE");
     console.log(`[WORKER] ✅ Job 완료 처리: id=${job.id}, status=DONE`);
   } catch (err) {
@@ -100,11 +110,12 @@ async function pollOnce() {
     console.error("  error:", err.message || err);
 
     try {
+      // ✅ 실패했을 때: FAILED
       await updateJobStatus(job.id, "FAILED");
-      console.log(`[WORKER] ⚠️ Job 상태를 FAILED 로 저장(모의): id=${job.id}`);
+      console.log(`[WORKER] ⚠️ Job 상태를 FAILED 로 저장: id=${job.id}`);
     } catch (e2) {
       console.error(
-        "[WORKER] ❌ FAILED 상태 업데이트도 실패(모의)",
+        "[WORKER] ❌ FAILED 상태 업데이트도 실패",
         e2.message || e2
       );
     }
@@ -172,11 +183,60 @@ async function processJob(job) {
 }
 
 // ____________________________
-// Job 상태 업데이트 (지금은 모의 로그만)
-// 추후 서버에 전용 엔드포인트 만들면 여기서 axios/fetch 로 호출하면 됨.
+// Job 상태 업데이트 (DONE / FAILED 서버에 전달)
 // ____________________________
 async function updateJobStatus(id, status) {
-  console.log(`[WORKER] (mock) Job 상태 업데이트: id=${id}, status=${status}`);
+  if (!JOB_STATUS_URL) {
+    console.warn(
+      "[WORKER] ⚠ JOB_STATUS_URL 이 설정되지 않아 상태 업데이트를 건너뜁니다.",
+      { id, status }
+    );
+    return;
+  }
+
+  const body = {
+    id,
+    status,
+  };
+
+  try {
+    const res = await fetch(JOB_STATUS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-jobqueue-secret": JOBQUEUE_WORKER_SECRET,
+      },
+      body: JSON.stringify(body),
+    });
+
+    const text = await res.text();
+    let json;
+
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = text;
+    }
+
+    if (!res.ok || (json && json.ok === false)) {
+      console.warn(
+        "[WORKER] ⚠ Job 상태 업데이트 응답이 정상적이지 않습니다.",
+        "status code=",
+        res.status,
+        "response=",
+        json
+      );
+    } else {
+      console.log(
+        `[WORKER] 🔄 Job 상태 업데이트 성공: id=${id}, status=${status}`
+      );
+    }
+  } catch (err) {
+    console.error(
+      "[WORKER] ❌ Job 상태 업데이트 요청 실패:",
+      err.message || err
+    );
+  }
 }
 
 // ____________________________
