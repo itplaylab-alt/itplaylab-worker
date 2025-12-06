@@ -50,12 +50,13 @@ let isProcessing = false;
 // ____________________________
 
 async function pollOnce() {
-  console.log(`\n[WORKER] 🔄 /next-job 요청 (${new Date().toISOString()})`);
+  console.log(`\n[WORKER] 🛰 /next-job 요청 (${new Date().toISOString()})`);
 
   let raw;
   try {
-    const res = await fetch(JOBQUEUE_WEBAPP_URL, {
-      method: "GET",
+    const res = await fetch(`${JOBQUEUE_WEBAPP_URL}/next-job`, {
+      method: "GET", // 지금 서버가 GET 받아주고 있으면 그대로 두고,
+      // 가능하면 나중에 POST로 바꾸는 게 베스트
       headers: {
         Accept: "application/json",
         "x-jobqueue-secret": JOBQUEUE_WORKER_SECRET,
