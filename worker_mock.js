@@ -55,12 +55,12 @@ async function pollOnce() {
   let raw;
   try {
     const res = await fetch(`${JOBQUEUE_WEBAPP_URL}/next-job`, {
-      method: "GET", // 지금 서버가 GET 받아주고 있으면 그대로 두고,
-      // 가능하면 나중에 POST로 바꾸는 게 베스트
+      method: "POST",
       headers: {
-        Accept: "application/json",
+        "Content-Type": "application/json",
         "x-jobqueue-secret": JOBQUEUE_WORKER_SECRET,
       },
+      body: JSON.stringify({ worker_id: WORKER_ID }),
     });
 
     raw = await res.text();
