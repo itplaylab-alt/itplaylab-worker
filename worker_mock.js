@@ -4,6 +4,7 @@
 const JOBQUEUE_WEBAPP_URL = process.env.JOBQUEUE_WEBAPP_URL;
 const JOBQUEUE_WORKER_SECRET = process.env.JOBQUEUE_WORKER_SECRET || "";
 const POLL_INTERVAL_MS = 5000; // 5초마다 폴링
+const WORKER_ID = process.env.WORKER_ID || "itplaylab-worker-1";
 
 // ✅ 완료 상태 업데이트용 엔드포인트 URL
 //    서버에서 /update-job-status 같은 라우트를 쓸 거라고 가정하고 만듦
