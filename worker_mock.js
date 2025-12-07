@@ -8,14 +8,18 @@ const WORKER_ID = process.env.WORKER_ID || "itplaylab-worker-1";
 
 console.log("[WORKER] DEBUG WORKER_ID env:", process.env.WORKER_ID, "local:", WORKER_ID);
 
-
-// ✅ 완료 상태 업데이트용 엔드포인트 URL
-//    서버에서 /update-job-status 같은 라우트를 쓸 거라고 가정하고 만듦
+// ✅ 완료 상태 업데이트용 URL (/update-job-status)
 const JOB_STATUS_URL =
   JOBQUEUE_WEBAPP_URL &&
   JOBQUEUE_WEBAPP_URL.replace(/\/next-job.*$/i, "/update-job-status");
 
-// ffmpeg (옵셔널: ffmpeg-static 있으면 사용, 없으면 전역 ffmpeg)
+// ✅ Worker 전용 next-job 폴링 URL (secret 포함)
+const NEXT_JOB_URL =
+  JOBQUEUE_WEBAPP_URL &&
+  JOBQUEUE_WEBAPP_URL.replace(/\/next-job.*$/i, "/next-job") +
+    `?secret=${encodeURIComponent(JOBQUEUE_WORKER_SECRET || "")}`;
+
+// ffmpeg (옵션: ffmpeg-static 있으면 사용)
 const { spawn } = require("child_process");
 
 let ffmpegPath;
@@ -30,10 +34,9 @@ try {
   ffmpegPath = "ffmpeg"; // PATH에 있는 ffmpeg 사용 시도
 }
 
+// 필수 환경변수 체크
 if (!JOBQUEUE_WEBAPP_URL) {
-  console.error(
-    "[WORKER] ❌ 환경변수 JOBQUEUE_WEBAPP_URL 이 설정되지 않았습니다."
-  );
+  console.error("[WORKER] ❌ 환경변수 JOBQUEUE_WEBAPP_URL 이 설정되지 않았습니다.");
   process.exit(1);
 }
 
@@ -43,8 +46,11 @@ if (!JOBQUEUE_WORKER_SECRET) {
   );
 }
 
+// 기본 정보 로그
 console.log("[WORKER] ✅ Worker 시작됨");
 console.log(`[WORKER] JobQueue URL: ${JOBQUEUE_WEBAPP_URL}`);
+console.log(`[WORKER] NextJob URL: ${NEXT_JOB_URL}`);
+console.log(`[WORKER] JobStatus URL: ${JOB_STATUS_URL}`);
 console.log(`[WORKER] Poll interval: ${POLL_INTERVAL_MS}ms`);
 
 let isProcessing = false;
