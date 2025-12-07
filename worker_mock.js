@@ -1,25 +1,42 @@
 // worker_mock.js
 // ItplayLab JobQueue Worker (Render용, /next-job 폴링 + ffmpeg 스모크 테스트)
 
-const JOBQUEUE_WEBAPP_URL = process.env.JOBQUEUE_WEBAPP_URL;
+// ───────────────────────────────────────
+// 1. 기본 설정 & 환경변수
+// ───────────────────────────────────────
+
+const JOBQUEUE_WEBAPP_URL = process.env.JOBQUEUE_WEBAPP_URL; // 예: https://itplaylab-server.onrender.com/next-job
 const JOBQUEUE_WORKER_SECRET = process.env.JOBQUEUE_WORKER_SECRET || "";
 const POLL_INTERVAL_MS = 5000; // 5초마다 폴링
 const WORKER_ID = process.env.WORKER_ID || "itplaylab-worker-1";
 
-console.log("[WORKER] DEBUG WORKER_ID env:", process.env.WORKER_ID, "local:", WORKER_ID);
+console.log(
+  "[WORKER] DEBUG WORKER_ID env:",
+  process.env.WORKER_ID,
+  "local:",
+  WORKER_ID
+);
 
 // ✅ 완료 상태 업데이트용 URL (/update-job-status)
 const JOB_STATUS_URL =
   JOBQUEUE_WEBAPP_URL &&
-  JOBQUEUE_WEBAPP_URL.replace(/\/next-job.*$/i, "/update-job-status");
+  `${JOBQUEUE_WEBAPP_URL.replace(
+    /\/next-job.*$/i,
+    "/update-job-status"
+  )}?secret=${encodeURIComponent(JOBQUEUE_WORKER_SECRET || "")}`;
 
-// ✅ Worker 전용 next-job 폴링 URL (secret 포함)
+// ✅ Worker 전용 /next-job 폴링 URL (secret 포함)
 const NEXT_JOB_URL =
   JOBQUEUE_WEBAPP_URL &&
-  JOBQUEUE_WEBAPP_URL.replace(/\/next-job.*$/i, "/next-job") +
-    `?secret=${encodeURIComponent(JOBQUEUE_WORKER_SECRET || "")}`;
+  `${JOBQUEUE_WEBAPP_URL.replace(
+    /\/next-job.*$/i,
+    "/next-job"
+  )}?secret=${encodeURIComponent(JOBQUEUE_WORKER_SECRET || "")}`;
 
-// ffmpeg (옵션: ffmpeg-static 있으면 사용)
+// ───────────────────────────────────────
+// 2. ffmpeg (옵션: ffmpeg-static 있으면 사용, 없으면 전역 ffmpeg)
+// ───────────────────────────────────────
+
 const { spawn } = require("child_process");
 
 let ffmpegPath;
@@ -34,9 +51,14 @@ try {
   ffmpegPath = "ffmpeg"; // PATH에 있는 ffmpeg 사용 시도
 }
 
-// 필수 환경변수 체크
+// ───────────────────────────────────────
+// 3. 필수 환경변수 체크
+// ───────────────────────────────────────
+
 if (!JOBQUEUE_WEBAPP_URL) {
-  console.error("[WORKER] ❌ 환경변수 JOBQUEUE_WEBAPP_URL 이 설정되지 않았습니다.");
+  console.error(
+    "[WORKER] ❌ 환경변수 JOBQUEUE_WEBAPP_URL 이 설정되지 않았습니다."
+  );
   process.exit(1);
 }
 
@@ -55,306 +77,144 @@ console.log(`[WORKER] Poll interval: ${POLL_INTERVAL_MS}ms`);
 
 let isProcessing = false;
 
-// ____________________________
-// 메인 폴링 루프
-// ____________________________
+// ───────────────────────────────────────
+// 4. 메인 폴링 루프
+// ───────────────────────────────────────
 
 async function pollOnce() {
-  console.log(`\n[WORKER] 🛰 /next-job 요청 (${new Date().toISOString()})`);
-
-  let raw;
-  try {
-    const res = await fetch(`${JOBQUEUE_WEBAPP_URL}/next-job`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-jobqueue-secret": JOBQUEUE_WORKER_SECRET,
-      },
-      body: JSON.stringify({ worker_id: WORKER_ID }),
-    });
-
-    raw = await res.text();
-  } catch (err) {
-    console.error("[WORKER] ❌ /next-job 호출 실패:", err.message || err);
-    return;
-  }
-
-  let data;
-  try {
-    data = JSON.parse(raw);
-  } catch (e) {
-    console.error(
-      "[WORKER] ❌ /next-job JSON 파싱 실패. 응답 일부:",
-      String(raw).slice(0, 200)
-    );
-    return;
-  }
-
-  const ok = data.ok;
-  const hasJob = data.has_job;
-  const job = data.job;
-
-  if (!ok) {
-    console.warn("[WORKER] ⚠️ /next-job 응답 ok:false", data);
-    return;
-  }
-
-  if (!hasJob || !job) {
-    console.log("[WORKER] 📭 PENDING job 없음 (has_job=false)");
-    return;
-  }
-
-  console.log(
-    `[WORKER] 📦 Job 할당됨: id=${job.id || "unknown"}, status=${
-      job.status || "-"
-    }`
-  );
-
-  try {
-    await processJob(job);
-
-    // ✅ Job 성공적으로 끝났을 때: DONE
-    await updateJobStatus(job.id, "DONE");
-    console.log(`[WORKER] ✅ Job 완료 처리: id=${job.id}, status=DONE`);
-  } catch (err) {
-    console.error(`[WORKER] ❌ Job 처리 실패: id=${job.id}`);
-    console.error("  error:", err.message || err);
-
-    try {
-      // ✅ 실패했을 때: FAILED
-      await updateJobStatus(job.id, "FAILED");
-      console.log(`[WORKER] ⚠️ Job 상태를 FAILED 로 저장: id=${job.id}`);
-    } catch (e2) {
-      console.error(
-        "[WORKER] ❌ FAILED 상태 업데이트도 실패",
-        e2.message || e2
-      );
-    }
-  }
-}
-
-// interval마다 돌리되, 이전 작업이 끝나지 않았으면 skip
-async function pollLoop() {
   if (isProcessing) {
-    console.log("[WORKER] ⏸ 이전 Job 처리 중, 이번 턴은 건너뜀");
+    // 혹시라도 겹쳐서 돌지 않도록 보호
     return;
   }
 
   isProcessing = true;
+
   try {
-    await pollOnce();
+    console.log(
+      `\n[WORKER] 🚚 /next-job 폴링 (${new Date().toISOString()})`
+    );
+
+    const res = await fetch(NEXT_JOB_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ worker_id: WORKER_ID }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    console.log(
+      "[WORKER] /next-job 응답:",
+      JSON.stringify(data, null, 2)
+    );
+
+    if (!data.ok) {
+      console.error("[WORKER] ❌ next-job 실패:", data.error);
+      return;
+    }
+
+    if (!data.has_job || !data.job) {
+      console.log("[WORKER] ⏳ 대기 중 – 처리할 job 없음.");
+      return;
+    }
+
+    const job = data.job;
+    await handleJob(job);
+  } catch (err) {
+    console.error("[WORKER] ❌ pollOnce error:", err);
   } finally {
     isProcessing = false;
   }
 }
 
-setInterval(pollLoop, POLL_INTERVAL_MS);
-console.log("[WORKER] 🚀 Polling loop started");
+// ───────────────────────────────────────
+// 5. Job 처리 (모킹 버전)
+// ───────────────────────────────────────
 
-// ____________________________
-// 실제 작업 로직 (ffmpeg로 5초짜리 테스트 영상 생성 + 썸네일 생성)
-// ____________________________
-async function processJob(job) {
-  console.log(`[WORKER] 🛠 Job 처리 시작: id=${job.id}`);
-  console.log(`[WORKER] ▶ ffmpeg binary: ${ffmpegPath}`);
+async function handleJob(job) {
+  const traceId = job.trace_id || job.id || "unknown";
+  console.log(
+    `[WORKER] 🧾 Job 수신 trace_id=${traceId}, type=${job.type || "unknown"}`
+  );
 
-  // 1) ffmpeg 버전 체크
-  try {
-    await runFfmpegVersion();
-  } catch (err) {
-    console.error("[WORKER] ❌ ffmpeg 버전 확인 실패:", err.message || err);
-    throw err;
-  }
+  // 서버에 "worker가 job 받았음" 알림
+  await updateStatus(traceId, {
+    step: "worker_received",
+    status: "running",
+    meta: { worker_id: WORKER_ID },
+  });
 
-  // 2) 출력 영상 경로
-  const outputPath = `/tmp/job_${job.id}.mp4`;
-  console.log(`[WORKER] ▶ 테스트 영상 렌더링 시작: ${outputPath}`);
+  const startedAt = Date.now();
 
   try {
-    await renderTestVideo(outputPath);
-    console.log(`[WORKER] ✅ 테스트 영상 렌더링 완료: ${outputPath}`);
+    console.log("[WORKER] 🎬 (mock) ffmpeg 작업 시작");
 
-    // 3) 썸네일 생성
-    const thumbPath = `/tmp/job_${job.id}.jpg`;
+    // 🔧 여기서는 ffmpeg를 진짜 돌리기보다는, 간단하게 3초 대기해서 "스모크 테스트"만 함
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
+    const durationMs = Date.now() - startedAt;
+
+    await updateStatus(traceId, {
+      step: "done",
+      status: "success",
+      output_url: job.output_url || "",
+      latency_ms: durationMs,
+    });
+
     console.log(
-      `[WORKER] ▶ 썸네일 생성 시작: input=${outputPath}, output=${thumbPath}`
+      `[WORKER] ✅ 작업 완료 trace_id=${traceId}, latency=${durationMs}ms`
     );
-
-    await renderThumbnail(outputPath, thumbPath);
-    console.log(`[WORKER] ✅ 썸네일 생성 완료: ${thumbPath}`);
   } catch (err) {
-    console.error(
-      "[WORKER] ❌ 테스트 영상/썸네일 생성 실패:",
-      err.message || err
-    );
-    throw err;
-  }
+    await updateStatus(traceId, {
+      step: "error",
+      status: "failed",
+      error: String(err?.message || err),
+    });
 
-  console.log(`[WORKER] ✅ Job 처리 완료: id=${job.id}`);
+    console.error("[WORKER] ❌ 작업 중 오류:", err);
+  }
 }
 
-// ____________________________
-// Job 상태 업데이트 (DONE / FAILED 서버에 전달)
-// ____________________________
-async function updateJobStatus(id, status) {
+// ───────────────────────────────────────
+// 6. 서버에 상태 업데이트
+// ───────────────────────────────────────
+
+async function updateStatus(traceId, payload) {
   if (!JOB_STATUS_URL) {
     console.warn(
-      "[WORKER] ⚠ JOB_STATUS_URL 이 설정되지 않아 상태 업데이트를 건너뜁니다.",
-      { id, status }
+      "[WORKER] (updateStatus) JOB_STATUS_URL 없음. 서버에 상태 전송 생략."
     );
     return;
   }
 
   const body = {
-    id,
-    status,
+    trace_id: traceId,
+    worker_id: WORKER_ID,
+    ...payload,
   };
 
   try {
     const res = await fetch(JOB_STATUS_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-jobqueue-secret": JOBQUEUE_WORKER_SECRET,
-      },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
 
-    const text = await res.text();
-    let json;
-
-    try {
-      json = JSON.parse(text);
-    } catch {
-      json = text;
-    }
-
-    if (!res.ok || (json && json.ok === false)) {
-      console.warn(
-        "[WORKER] ⚠ Job 상태 업데이트 응답이 정상적이지 않습니다.",
-        "status code=",
-        res.status,
-        "response=",
-        json
-      );
-    } else {
-      console.log(
-        `[WORKER] 🔄 Job 상태 업데이트 성공: id=${id}, status=${status}`
-      );
-    }
-  } catch (err) {
-    console.error(
-      "[WORKER] ❌ Job 상태 업데이트 요청 실패:",
-      err.message || err
+    const data = await res.json().catch(() => ({}));
+    console.log(
+      "[WORKER] ↪ update-job-status 응답:",
+      JSON.stringify(data)
     );
+  } catch (err) {
+    console.error("[WORKER] ❌ updateStatus 오류:", err);
   }
 }
 
-// ____________________________
-// ffmpeg 유틸
-// ____________________________
+// ───────────────────────────────────────
+// 7. 폴링 시작
+// ───────────────────────────────────────
 
-function runFfmpegVersion() {
-  return new Promise((resolve, reject) => {
-    const child = spawn(ffmpegPath, ["-version"]);
+setInterval(pollOnce, POLL_INTERVAL_MS);
+console.log("[WORKER] ⏰ Poll loop started.");
 
-    let output = "";
-
-    child.stdout.on("data", (data) => (output += data.toString()));
-    child.stderr.on("data", (data) => (output += data.toString()));
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        const firstLine = output.split("\n")[0];
-        console.log("[WORKER] ffmpeg -version 출력 (첫 줄):", firstLine);
-        resolve();
-      } else {
-        reject(new Error(`ffmpeg 종료 코드 ${code}\n${output}`));
-      }
-    });
-  });
-}
-
-// ==========================
-//  테스트 영상 생성 함수
-// ==========================
-
-function renderTestVideo(outputPath) {
-  return new Promise((resolve, reject) => {
-    const args = [
-      "-y",
-      "-f",
-      "lavfi",
-      "-i",
-      "color=c=black:s=1280x720:d=5",
-      "-c:v",
-      "libx264",
-      "-pix_fmt",
-      "yuv420p",
-      outputPath,
-    ];
-
-    console.log("[WORKER] ▶ ffmpeg 실행:", ffmpegPath, args.join(" "));
-
-    const child = spawn(ffmpegPath, args);
-    let output = "";
-
-    child.stdout.on("data", (data) => (output += data.toString()));
-    child.stderr.on("data", (data) => (output += data.toString()));
-    child.on("error", (err) => reject(err));
-
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`ffmpeg 종료 코드 ${code}\n${output}`));
-    });
-  });
-}
-
-// ==========================
-//  썸네일 생성 함수
-// ==========================
-
-function renderThumbnail(inputPath, thumbPath) {
-  return new Promise((resolve, reject) => {
-    console.log(
-      `[WORKER] ▶ 썸네일 생성 시작(내부 ffmpeg): input=${inputPath}, output=${thumbPath}`
-    );
-
-    const args = [
-      "-ss",
-      "00:00:01", // 1초 지점
-      "-i",
-      inputPath, // mp4
-      "-vframes",
-      "1", // 1장
-      "-q:v",
-      "2", // 화질
-      thumbPath,
-    ];
-
-    const child = spawn(ffmpegPath, args);
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (data) => (stdout += data.toString()));
-    child.stderr.on("data", (data) => (stderr += data.toString()));
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        console.log(`[WORKER] 👍 썸네일 생성 완료: ${thumbPath}`);
-        resolve();
-      } else {
-        console.error("[WORKER] ❌ 썸네일 생성 실패");
-        reject(
-          new Error(`ffmpeg thumbnail exited with code ${code}\n${stderr}`)
-        );
-      }
-    });
-
-    child.on("error", (err) => {
-      console.error("[WORKER] ❌ 썸네일 생성 중 프로세스 에러:", err);
-      reject(err);
-    });
-  });
-}
+pollOnce().catch((e) =>
+  console.error("[WORKER] 초기 pollOnce 오류:", e)
+);
