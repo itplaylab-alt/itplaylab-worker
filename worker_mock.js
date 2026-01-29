@@ -133,25 +133,29 @@ async function pollOnce() {
   try {
     // ✅ next-job: route 기반. GET이든 POST든 되게 해두되, 우선 POST 유지
     const res = await fetch(NEXT_JOB_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        ...(JOBQUEUE_API_KEY ? { "x-jobqueue-api-key": JOBQUEUE_API_KEY } : {}),
-      },
-      body: JSON.stringify({
-        worker_id: WORKER_ID,
-      }),
-    });
+  method: "GET",
+  headers: {
+    "Accept": "application/json",
+    ...(JOBQUEUE_API_KEY ? { "x-jobqueue-api-key": JOBQUEUE_API_KEY } : {}),
+  },
+});
 
-    let data = null;
-    try {
-      data = await res.json();
-    } catch (e) {
-      console.error("[WORKER] ❌ next-job 응답 JSON 파싱 실패:", e.message || e);
-    }
+// ✅ 진단 로그 추가
+const ct = res.headers.get("content-type") || "";
+const text = await res.text();
 
-    console.log("[WORKER] next-job 응답:", data);
+console.log("[WORKER] next-job HTTP:", res.status, res.statusText, "ct:", ct);
+console.log("[WORKER] next-job body preview:", text.slice(0, 200)); // 앞 200자만
+
+let data = null;
+try {
+  data = JSON.parse(text);
+} catch (e) {
+  console.error("[WORKER] ❌ next-job JSON 파싱 실패:", e.message || e);
+  data = null;
+}
+
+console.log("[WORKER] next-job 응답:", data);
 
     if (!data || data.ok === false) {
       console.error(
