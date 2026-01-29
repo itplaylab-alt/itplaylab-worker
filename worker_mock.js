@@ -30,7 +30,10 @@ function buildUrl(route) {
   return u.toString();
 }
 
-const NEXT_JOB_URL = buildUrl("next-job");
+const u = new URL(buildUrl("next-job"));
+u.searchParams.set("debug", "1");
+const NEXT_JOB_URL = u.toString();
+
 const UPDATE_STATUS_URL = buildUrl("update-job-status");
 
 // ffmpeg (옵셔널: ffmpeg-static 있으면 사용, 없으면 전역 ffmpeg)
