@@ -136,12 +136,15 @@ async function pollOnce() {
   try {
     // ✅ next-job: route 기반. GET이든 POST든 되게 해두되, 우선 POST 유지
     const res = await fetch(NEXT_JOB_URL, {
-  method: "GET",
+  method: "POST",
   headers: {
     "Accept": "application/json",
-    ...(JOBQUEUE_API_KEY ? { "x-jobqueue-api-key": JOBQUEUE_API_KEY } : {}),
+    "Content-Type": "application/json",
+    ...
   },
+  body: JSON.stringify({})
 });
+
 
 // ✅ 진단 로그 추가
 const ct = res.headers.get("content-type") || "";
