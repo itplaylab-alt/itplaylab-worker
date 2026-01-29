@@ -140,10 +140,12 @@ async function pollOnce() {
   headers: {
     "Accept": "application/json",
     "Content-Type": "application/json",
-    ...
+    ...(JOBQUEUE_API_KEY ? { "x-jobqueue-api-key": JOBQUEUE_API_KEY } : {}),
   },
-  body: JSON.stringify({})
+  // 라우트가 query에 있어도, body에도 넣어두면 doPost 파싱 이슈를 원천 봉쇄
+  body: JSON.stringify({ route: "next-job" }),
 });
+
 
 
 // ✅ 진단 로그 추가
